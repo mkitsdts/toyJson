@@ -75,33 +75,64 @@ std::string JsonValue::serialize() const {
             return result;
         }
     };
+
     return std::visit(Visitor{}, value);
 }
 
+// 跳过空白字符
+inline void skipWhitespace(std::string_view json, size_t& pos) {
+	while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == '\r' || json[pos] == '\t')) {
+		pos++;
+	}
+}
+
 inline JsonValue parse(std::string_view json, size_t& pos) {
-    if (json.empty() && pos >= json.size()) {
+    if (json.empty() || pos >= json.size()) {
         return JsonValue(std::nullptr_t{});
     }
     if (json[pos] == '{') {
         JsonObject obj;
+        pos++;
         while (pos < json.size() && json[pos] != '}') {
-            while (json[pos] != '"') {
-                pos++;
-                if (pos >= json.size()) return JsonValue(obj);
+            skipWhitespace(json, pos);
+            if (json[pos] == '}') {
+				pos++;
+				return JsonValue(obj);
             }
-            auto keyStart = ++pos;
+            else if (json[pos] != '"') {
+                throw std::invalid_argument("Invalid JSON string");
+            }
+            auto keyStart = pos + 1;
             while (json[pos] != ':') { 
                 pos++;
-                if (pos >= json.size()) return JsonValue(obj);
+                if (pos >= json.size() || json[pos] == '}') {
+                    pos++;
+                    return JsonValue(obj);
+                }
             }
             std::string_view key = json.substr(keyStart, pos - keyStart - 1);
             pos++;
-            while (json[pos] == ' ') {
-                pos++;
-                if (pos >= json.size()) return JsonValue(obj);
-            }
+            skipWhitespace(json, pos);
+            if(pos >= json.size()) return JsonValue(obj);
             JsonValue value = parse(json, pos);
             obj[std::string(key)] = value;
+            if (json[pos] != ',') {
+                skipWhitespace(json, pos);
+                if (json[pos] == '}') {
+                    pos++;
+                    break;
+                }
+                else if (json[pos] == ',') {
+                    pos++;
+                    continue;
+                }
+                else {
+                    throw std::invalid_argument("Invalid JSON string");
+                }
+            }
+            else {
+				pos++;
+			}
         }
         return JsonValue(obj);
     }
@@ -109,16 +140,32 @@ inline JsonValue parse(std::string_view json, size_t& pos) {
         JsonArray arr;
         pos++;
         while (pos < json.size() && json[pos] != ']') {
-            while (json[pos] == ' ' || json[pos] == 10 || json[pos] == ',') {
+            skipWhitespace(json, pos);
+            if (json[pos] == ']') {
                 pos++;
-                if (pos >= json.size()) return JsonValue(arr);
+                return JsonValue(arr);
             }
             arr.push_back(parse(json, pos));
+            if (json[pos] != ',') {
+                skipWhitespace(json, pos);
+                if (json[pos] == ']') {
+                    pos++;
+                    break;
+                }
+                else if (json[pos] == ',') {
+                    pos++;
+                    continue;
+                }
+            }
+            else {
+                pos++;
+            }
         }
         return JsonValue(arr);
     }
     else if (json[pos] == '"') {
-        size_t start = ++pos;
+        pos++;
+        size_t start = pos;
         while (json[pos] != '"') {
             if (pos >= json.size()) throw std::invalid_argument("Invalid JSON string");
             pos++;
@@ -127,27 +174,35 @@ inline JsonValue parse(std::string_view json, size_t& pos) {
         return JsonValue(std::string(json.substr(start, pos - start - 1)));
     }
     else if (json[pos] == 't') {
+        pos++;
         return JsonValue(true);
     }
     else if (json[pos] == 'f') {
+        pos++;
         return JsonValue(false);
     }
     else if (json[pos] == 'n') {
+        pos++;
         return JsonValue(nullptr);
     }
     else if (json[pos] >= '0' && json[pos] <= '9') {
         auto begin = pos;
         bool isDouble = false;
-        while (pos < json.size() && json[pos] != ',') {
+        while (pos < json.size() && json[pos] != ',' && json[pos] != '\n' && json[pos] != '\r' && json[pos] != '\t') {
             pos++;
             if (json[pos] == '.' || json[pos] == 'e') {
                 isDouble = true;
             }
         }
-        ++pos;
         if(isDouble) {
+            if (begin == pos - 1) {
+                return JsonValue(std::stod(std::string(1, json[begin])));
+            }
 			return JsonValue(std::stod(std::string(json.substr(begin, pos- begin -1))));
 		}
+        if (begin == pos - 1) {
+            return JsonValue(std::stoi(std::string(1, json[begin])));
+        }
         return JsonValue(std::stoi(std::string(json.substr(begin, pos- begin - 1))));
     }
     else {
@@ -158,50 +213,86 @@ inline JsonValue parse(std::string_view json, size_t& pos) {
 }
 
 inline JsonValue parse(std::string_view json) {
-    if (json.empty()) {
-        return JsonValue(std::nullptr_t{});
-    }
+    if (json.empty()) return JsonValue(std::nullptr_t{});
     size_t pos = 1;
     if (json[0] == '{') {
         JsonObject obj;
         while (pos < json.size() && json[pos] != '}') {
+            skipWhitespace(json, pos);
+            if (json[pos] == '}') {
+				pos++;
+				return JsonValue(obj);
+			}
+			else if (json[pos] != '"') {
+				throw std::invalid_argument("Invalid JSON string");
+			}
             auto keyStart = pos + 1;
-            while (json[pos] != '"') {
-                pos++;
-                if (pos >= json.size()) return JsonValue(obj);
-            }
-            keyStart = ++pos;
             while (json[pos] != ':') {
                 pos++;
-                if (pos >= json.size()) return JsonValue(obj);
+                if (pos >= json.size() || json[pos] == '}') {
+                    pos++;
+                    return JsonValue(obj);
+                }
             }
             std::string_view key = json.substr(keyStart, pos - keyStart - 1);
             pos++;
-            while (json[pos] == ' ') {
-                pos++;
-                if (pos >= json.size()) return JsonValue(obj);
-            }
+            skipWhitespace(json, pos);
+            if (pos >= json.size()) return JsonValue(obj);
             JsonValue value = parse(json, pos);
             obj[std::string(key)] = value;
+            if (json[pos] != ',') {
+                skipWhitespace(json, pos);
+                if (json[pos] == '}') {
+                    pos++;
+                    break;
+                }
+                else if (json[pos] == ',') {
+                    pos++;
+                    continue;
+                }
+                else {
+                    throw std::invalid_argument("Invalid JSON string");
+                }
+            }
+            else {
+                pos++;
+            }
         }
         return JsonValue(obj);
     }
     else if (json[0] == '[') {
         JsonArray arr;
         while (pos < json.size() && json[pos] != ']') {
-            while (json[pos] == ' ' || json[pos] == 10) {
-                pos++;
-                if (pos >= json.size()) return JsonValue(arr);
-            }
+            skipWhitespace(json, pos);
+            if(json[pos] == ']') {
+				pos++;
+				return JsonValue(arr);
+			}
             arr.push_back(parse(json, pos));
+            if (json[pos] != ',') {
+                skipWhitespace(json, pos);
+                if (json[pos] == ']') {
+                    pos++;
+                    break;
+                }
+                else if (json[pos] == ',') {
+                    pos++;
+                    continue;
+                }
+            }
+            else {
+                pos++;
+            }
         }
         return JsonValue(arr);
     }
     else if (json[0] == '"') {
-        while (json[0] != '"') {
+        pos++;
+        while (json[pos] != '"') {
             pos++;
             if (pos >= json.size()) throw std::invalid_argument("Invalid JSON string");
         }
+        pos++;
         return JsonValue(std::string(json.substr(1, pos - 1)));
     }
     else if (json[0] == 't') {
@@ -215,20 +306,27 @@ inline JsonValue parse(std::string_view json) {
     }
     else if (json[0] >= '0' && json[0] <= '9') {
         bool isDouble = false;
-        while (pos < json.size() && json[pos] != ',') {
+        while (pos < json.size() && json[pos] != ',' && json[pos] != '\n' && json[pos] != '\r' && json[pos] != '\t') {
             pos++;
             if (json[pos] == '.' || json[pos] == 'e') {
                 isDouble = true;
             }
         }
-        ++pos;
         if (isDouble) {
+            if(pos == 1) {
+                return JsonValue(std::stod(std::string(1,json[0])));
+            }
             return JsonValue(std::stod(std::string(json.substr(0, pos - 1))));
+        }
+        if(pos == 1) {
+            return JsonValue(std::stoi(std::string(1,json[0])));
         }
         return JsonValue(std::stoi(std::string(json.substr(0, pos - 1))));
     }
     else {
-        if (pos >= json.size()) return JsonValue(nullptr);
+        if (pos >= json.size()) {
+            return JsonValue(nullptr);
+        }
         return parse(json, ++pos);
     }
     throw std::invalid_argument("Invalid JSON string");
